@@ -4,100 +4,46 @@ import (
 	"net"
 	"log"
 	"bufio"
+	"strings"
+	"fmt"
 )
-
-type listenerStruct struct{
-	listener net.Listener
-	success bool
-}
 
 func main() {
 	
-	
+	listener, err := net.Listen("tcp", ":8090")
+    if err != nil {
+        log.Fatal("Error listening:", err)
+    }
 
-	
-	defer listner.Close()
+	defer listener.Close()
 
 	for {
-		conn, err := listner.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
-			log.Fatal("Error accepting connection: ", err)
+			log.Printf("Error accepting connection: %v", err)
 			continue
 		}
 
 		go handleConnection(conn)
 	}
 }
-func createListeners() []listenerStruct {
-	listeners := []listenerStruct{} 
-	listner1, err := net.Listen("tcp", ":8081")
-	if err == nil {
-		listeners = append(listeners, listenerStruct{
-			listener: listner1,
-			success: true,
-		})
-	} else {
-		listeners = append(listeners, listenerStruct{
-			listener: nil,
-			success: false,
-		})
-		log.Fatal("Error listening on server '8081': ", err)
-	}
 
-	listner2, err := net.Listen("tcp", ":8082")
-	if err == nil {
-		listeners = append(listeners, listenerStruct{
-			listener: listner2,
-			success: true,
-		})
-	} else {
-		listeners = append(listeners, listenerStruct{
-			listener: nil,
-			success: false,
-		})
-		log.Fatal("Error listening on server '8082': ", err)
-	}
-
-	listner3, err := net.Listen("tcp", ":8083")
-	if err == nil {
-		listeners = append(listeners, listenerStruct{
-			listener: listner3,
-			success: true,
-		})
-	} else {
-		listeners = append(listeners, listenerStruct{
-			listener: nil,
-			success: false,
-		})
-		log.Fatal("Error listening on server '8083': ", err)
-	}
-
-	listner4, err := net.Listen("tcp", ":8084")
-	if err == nil {
-		listeners = append(listeners, listenerStruct{
-			listener: listner4,
-			success: true,
-		})
-	} else {
-		listeners = append(listeners, listenerStruct{
-			listener: nil,
-			success: false,
-		})
-		log.Fatal("Error listening on server '8084': ", err)
-	}
-	
-	return listeners
-}
 
 func handleConnection(conn net.Conn) {
+
 	defer conn.Close()
 
 	reader := bufio.NewReader(conn)
 	message, err := reader.ReadString('\n')
 	if err != nil {
-		log.Fatal("Read error: ", err)
+		log.Printf("Read error: %v", err)
 		return
 	}
 
-	ackMsg := 
+	ackMsg := strings.ToUpper(strings.TrimSpace(message))
+    response := fmt.Sprintf("ACK: %s\n", ackMsg)
+    _, err = conn.Write([]byte(response))
+    if err != nil {
+        log.Printf("Server write error: %v", err)
+    }
 }
