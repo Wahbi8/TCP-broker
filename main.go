@@ -6,6 +6,18 @@ import (
 	"bufio"
 	"strings"
 	"fmt"
+	"sync"
+)
+
+var mu sync.RWMutex
+var brokerMap = make(map[string][]net.Conn)
+
+type serviceType int
+const (
+	Order serviceType = iota
+	Email 
+	Inventory
+	Analytics
 )
 
 func main() {
@@ -28,7 +40,6 @@ func main() {
 	}
 }
 
-
 func handleConnection(conn net.Conn) {
 
 	defer conn.Close()
@@ -41,7 +52,14 @@ func handleConnection(conn net.Conn) {
 			break
 		}
 	
-		ackMsg := strings.ToUpper(strings.TrimSpace(message))
+		ackMsg := strings.TrimSpace(message)
+
+		err = processMessage(ackMsg)
+		if err != nil {
+			log.Printf("Message processing error: %v", err)
+			break
+		}
+
 		response := fmt.Sprintf("ACK: %s\n", ackMsg)
 		_, err = conn.Write([]byte(response))
 		if err != nil {
@@ -49,4 +67,18 @@ func handleConnection(conn net.Conn) {
 			break
 		}
 	}
+}
+
+func processMessage(msg string) error {
+
+	switch {
+	case strings.HasPrefix(msg, "PUB"):
+		// to do
+	case strings.HasPrefix(msg, "SUB"):
+		// todo
+	case strings.HasPrefix(msg, "UNSUB"):
+		//todo
+	}
+
+	return nil
 }
