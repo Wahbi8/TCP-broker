@@ -54,7 +54,7 @@ func handleConnection(conn net.Conn) {
 	
 		ackMsg := strings.TrimSpace(message)
 
-		err = processMessage(ackMsg)
+		err = processMessage(ackMsg, conn)
 		if err != nil {
 			log.Printf("Message processing error: %v", err)
 			break
@@ -69,15 +69,45 @@ func handleConnection(conn net.Conn) {
 	}
 }
 
-func processMessage(msg string) error {
+func processMessage(msg string, conn net.Conn) error {
 
 	switch {
-	case strings.HasPrefix(msg, "PUB"):
-		// to do
 	case strings.HasPrefix(msg, "SUB"):
-		// todo
+		parts := strings.Split(msg, " ")
+		topic := parts[1]
+
+		mu.Lock()
+		if conns, exists := brokerMap[topic]; exists {
+			for _, c := range conns {
+				if conn == c {
+					fmt.Printf("Connection already exists: %v", conn)
+					break
+				}
+			}
+		}
+		brokerMap[topic] = append(brokerMap[topic], conn)
+		mu.Unlock()
+
+	case strings.HasPrefix(msg, "PUB"):
+		parts := strings.Split(msg, " ")
+		topic := parts[1]
+
+		if conns, exists := brokerMap[topic]; exists {
+			for _, conn := range conns {
+				conn.Write([]byte(parts[3]))
+			}
+		}
 	case strings.HasPrefix(msg, "UNSUB"):
-		//todo
+		parts := strings.Split(msg, " ")
+		topic := parts[1]
+
+		if conns, exists := brokerMap[topic]; exists {
+			for _, c := range conns {
+				if conn == c {
+					// build tempSlice = brokerMap except the conn and reassign 
+				}
+			}
+		}
 	}
 
 	return nil
