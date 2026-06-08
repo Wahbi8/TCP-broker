@@ -12,14 +12,6 @@ import (
 var mu sync.RWMutex
 var brokerMap = make(map[string][]net.Conn)
 
-type serviceType int
-const (
-	Order serviceType = iota
-	Email 
-	Inventory
-	Analytics
-)
-
 func main() {
 	
 	listener, err := net.Listen("tcp", ":8090")
@@ -54,13 +46,9 @@ func handleConnection(conn net.Conn) {
 	
 		ackMsg := strings.TrimSpace(message)
 
-		err = processMessage(ackMsg, conn)
-		if err != nil {
-			log.Printf("Message processing error: %v", err)
-			break
-		}
+		processMessage(ackMsg, conn)
 
-		response := fmt.Sprintf("ACK: %s\n", ackMsg)
+		response := "ACK: Ok"
 		_, err = conn.Write([]byte(response))
 		if err != nil {
 			log.Printf("Server write error: %v", err)
@@ -69,7 +57,7 @@ func handleConnection(conn net.Conn) {
 	}
 }
 
-func processMessage(msg string, conn net.Conn) error {
+func processMessage(msg string, conn net.Conn) {
 
 	switch {
 	case strings.HasPrefix(msg, "SUB"):
@@ -81,7 +69,7 @@ func processMessage(msg string, conn net.Conn) error {
 			for _, c := range conns {
 				if conn == c {
 					fmt.Printf("Connection already exists: %v", conn)
-					break
+					return
 				}
 			}
 		}
@@ -92,23 +80,26 @@ func processMessage(msg string, conn net.Conn) error {
 		parts := strings.Split(msg, " ")
 		topic := parts[1]
 
+		mu.Lock()
 		if conns, exists := brokerMap[topic]; exists {
 			for _, conn := range conns {
-				conn.Write([]byte(parts[3]))
+				conn.Write([]byte(strings.Join(parts[2:], " ")))
 			}
 		}
+		mu.Unlock()
+
 	case strings.HasPrefix(msg, "UNSUB"):
 		parts := strings.Split(msg, " ")
 		topic := parts[1]
 
-		if conns, exists := brokerMap[topic]; exists {
-			for _, c := range conns {
-				if conn == c {
-					// build tempSlice = brokerMap except the conn and reassign 
-				}
+		temp := []net.Conn{}
+		mu.Lock()
+		for _, c := range brokerMap[topic] {
+			if c != conn {
+				temp = append(temp, c)
 			}
 		}
+		brokerMap[topic] = temp
+		mu.Unlock()
 	}
-
-	return nil
 }
