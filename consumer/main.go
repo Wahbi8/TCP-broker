@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"time"
 )
 
 func main() {
@@ -15,26 +16,33 @@ func main() {
 
 	topic := os.Args[1]
 
-	conn, err := net.Dial("tcp", ":8090")
-	if err != nil {
-		fmt.Println("Error connecting:", err)
-		return
-	}
-	defer conn.Close()
-
-	_, err = conn.Write([]byte(fmt.Sprintf("SUB %s\n", topic)))
-	if err != nil {
-		fmt.Println("Error subscribing:", err)
-		return
-	}
-
-	reader := bufio.NewReader(conn)
 	for {
-		msg, err := reader.ReadString('\n')
+		conn, err := net.Dial("tcp", ":8090")
 		if err != nil {
-			fmt.Println("Connection closed:", err)
-			return
+			fmt.Println("Error connecting:", err)
+			time.Sleep(5* time.Second)
+			continue
 		}
-		fmt.Print(msg)
+		// defer conn.Close()
+	
+		// _, err = conn.Write([]byte(fmt.Sprintf("SUB %s\n", topic)))
+		// if err != nil {
+		// 	fmt.Println("Error subscribing:", err)
+		// 	return
+		// }
+	
+		conn.Write([]byte(fmt.Sprintf("SUB %s\n", topic)))
+		fmt.Println("Connected and subscribed to:", topic)
+		
+		reader := bufio.NewReader(conn)
+		for {
+			msg, err := reader.ReadString('\n')
+			if err != nil {
+				fmt.Println("Connection closed:", err)
+				conn.Close()
+				break
+			}
+			fmt.Print(msg)
+		}
 	}
 }

@@ -1,16 +1,20 @@
 package main
 
 import (
-	"net"
-	"log"
 	"bufio"
-	"strings"
 	"fmt"
+	"log"
+	"net"
+	"os"
+	"os/signal"
+	"strings"
 	"sync"
+	"syscall"
 )
 
 var mu sync.RWMutex
 var brokerMap = make(map[string][]net.Conn)
+var msgBackup = make(map[string][]string)
 
 func main() {
 	
@@ -19,17 +23,36 @@ func main() {
         log.Fatal("Error listening:", err)
     }
 
-	defer listener.Close()
+	// defer listener.Close()
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Printf("Error accepting connection: %v", err)
-			continue
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				log.Printf("Error accepting connection: %v", err)
+				continue
+			}
+		
+			go handleConnection(conn)
 		}
+	}()
 
-		go handleConnection(conn)
+	<-sigChan
+	fmt.Println("\nShutting down gracefully...")
+
+	listener.Close()
+	
+	mu.Lock()
+	for _, conns := range brokerMap {
+		for _, c := range conns {
+			c.Close()
+		}
 	}
+	mu.Unlock()
+	
+	fmt.Println("Server stopped.")
 }
 
 func handleConnection(conn net.Conn) {
@@ -64,6 +87,8 @@ func processMessage(msg string, conn net.Conn) {
 		parts := strings.Split(msg, " ")
 		topic := parts[1]
 
+		//loop throw the backup and send the late messages to topic connections 
+
 		mu.Lock()
 		if conns, exists := brokerMap[topic]; exists {
 			for _, c := range conns {
@@ -83,9 +108,13 @@ func processMessage(msg string, conn net.Conn) {
 		mu.Lock()
 		if conns, exists := brokerMap[topic]; exists {
 			for _, conn := range conns {
-				conn.Write([]byte(strings.Join(parts[2:], " ")))
+				_, err := conn.Write([]byte(strings.Join(parts[2:], " ")))
+				if err != nil {
+					msgBackup[topic] = append(msgBackup[topic], msg) 
+				}
 			}
 		}
+		// read the return from consumer if err add the msg to the backup
 		mu.Unlock()
 
 	case strings.HasPrefix(msg, "UNSUB"):
