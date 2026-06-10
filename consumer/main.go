@@ -30,8 +30,9 @@ func main() {
 		// 	fmt.Println("Error subscribing:", err)
 		// 	return
 		// }
-	
-		conn.Write([]byte(fmt.Sprintf("SUB %s\n", topic)))
+		id := 1
+		
+		conn.Write([]byte(fmt.Sprintf("SUB %s %v\n", topic, id)))
 		fmt.Println("Connected and subscribed to:", topic)
 		
 		reader := bufio.NewReader(conn)

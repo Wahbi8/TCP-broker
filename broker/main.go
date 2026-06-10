@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -14,7 +15,14 @@ import (
 
 var mu sync.RWMutex
 var brokerMap = make(map[string][]net.Conn)
-var msgBackup = make(map[string][]string)
+var msgBackup = make(map[int][]string)
+
+type consumerIdentification struct{
+	id int
+	conn net.Conn
+}
+
+var consumerIds = []consumerIdentification{}
 
 func main() {
 	
@@ -86,10 +94,32 @@ func processMessage(msg string, conn net.Conn) {
 	case strings.HasPrefix(msg, "SUB"):
 		parts := strings.Split(msg, " ")
 		topic := parts[1]
-
-		//loop throw the backup and send the late messages to topic connections 
+		idConsumer, err := strconv.Atoi(parts[2])
+		if err != nil {
+			fmt.Printf("failed to convert the id to int")
+			return
+		}
 
 		mu.Lock()
+		exists := false
+		for i := range consumerIds {
+			if idConsumer == consumerIds[i].id && conn == consumerIds[i].conn {
+				exists = true
+				break
+			} else if idConsumer == consumerIds[i].id && conn != consumerIds[i].conn {
+				consumerIds[i].conn = conn
+				exists = true
+				break
+			}
+		}
+
+		if !exists {
+			consumerIds = append(consumerIds, consumerIdentification{
+				id: idConsumer,
+				conn: conn,
+			})
+		}
+		
 		if conns, exists := brokerMap[topic]; exists {
 			for _, c := range conns {
 				if conn == c {
@@ -110,7 +140,11 @@ func processMessage(msg string, conn net.Conn) {
 			for _, conn := range conns {
 				_, err := conn.Write([]byte(strings.Join(parts[2:], " ")))
 				if err != nil {
-					msgBackup[topic] = append(msgBackup[topic], msg) 
+					for i := range consumerIds {
+						if conn == consumerIds[i].conn {
+							msgBackup[consumerIds[i].id] = append(msgBackup[consumerIds[i].id], msg) 
+						}
+					}
 				}
 			}
 		}
