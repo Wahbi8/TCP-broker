@@ -15,14 +15,14 @@ import (
 
 var mu sync.RWMutex
 var brokerMap = make(map[string][]net.Conn)
-var msgBackup = make(map[int][]string)
+// var msgBackup = make(map[int][]string)
 
-type consumerIdentification struct{
-	id int
+type consumerState struct{
 	conn net.Conn
+	msgBackup []string
 }
 
-var consumerIds = []consumerIdentification{}
+var consumers = make(map[int]consumerState)
 
 func main() {
 	
@@ -102,22 +102,30 @@ func processMessage(msg string, conn net.Conn) {
 
 		mu.Lock()
 		exists := false
-		for i := range consumerIds {
-			if idConsumer == consumerIds[i].id && conn == consumerIds[i].conn {
+		if consumerData, ok := consumers[idConsumer]; ok {
+			if consumerData.conn == conn {
 				exists = true
-				break
-			} else if idConsumer == consumerIds[i].id && conn != consumerIds[i].conn {
-				consumerIds[i].conn = conn
+			} else {
+				consumerData.conn = conn
 				exists = true
-				break
 			}
 		}
+		// for i := range consumers {
+		// 	if idConsumer == consumers[i] && conn == consumerIds[i].conn {
+		// 		exists = true
+		// 		break
+		// 	} else if idConsumer == consumerIds[i].id && conn != consumerIds[i].conn {
+		// 		consumerIds[i].conn = conn
+		// 		exists = true
+		// 		break
+		// 	}
+		// }
 
 		if !exists {
-			consumerIds = append(consumerIds, consumerIdentification{
-				id: idConsumer,
+			consumers[idConsumer] = consumerState{
 				conn: conn,
-			})
+				msgBackup: nil,
+			}
 		}
 		
 		if conns, exists := brokerMap[topic]; exists {
@@ -140,15 +148,31 @@ func processMessage(msg string, conn net.Conn) {
 			for _, conn := range conns {
 				_, err := conn.Write([]byte(strings.Join(parts[2:], " ")))
 				if err != nil {
-					for i := range consumerIds {
-						if conn == consumerIds[i].conn {
-							msgBackup[consumerIds[i].id] = append(msgBackup[consumerIds[i].id], msg) 
-						}
-					}
+
+					// for i := range consumerIds {
+					// 	if conn == consumerIds[i].conn {
+					// 		msgBackup[consumerIds[i].id] = append(msgBackup[consumerIds[i].id], msg) 
+					// 	}
+					// }
 				}
 			}
 		}
-		// read the return from consumer if err add the msg to the backup
+		reader := bufio.NewReader(conn)
+		rsp, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Printf("Issue reading response: %v", err)
+			return
+		}
+
+		if strings.HasPrefix(rsp, "KO") {
+			rspParts := strings.Split(rsp, " ")
+			id, err := strconv.Atoi(rspParts[2])
+			if err != nil {
+				return
+			}
+
+			// msgBackup[id] = append(msgBackup[id], msg)
+		}
 		mu.Unlock()
 
 	case strings.HasPrefix(msg, "UNSUB"):

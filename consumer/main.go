@@ -20,7 +20,7 @@ func main() {
 		conn, err := net.Dial("tcp", ":8090")
 		if err != nil {
 			fmt.Println("Error connecting:", err)
-			time.Sleep(5* time.Second)
+			time.Sleep(2* time.Second)
 			continue
 		}
 		// defer conn.Close()
@@ -39,10 +39,14 @@ func main() {
 		for {
 			msg, err := reader.ReadString('\n')
 			if err != nil {
-				fmt.Println("Connection closed:", err)
+				fmt.Println("Issue reading msg:", err)
+				conn.Write([]byte(fmt.Sprintf("LOG KO %v", id)))
 				conn.Close()
 				break
 			}
+
+			conn.Write([]byte(fmt.Sprintf("LOG OK %v", id)))
+
 			fmt.Print(msg)
 		}
 	}
