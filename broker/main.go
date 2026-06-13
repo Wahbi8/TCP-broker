@@ -22,7 +22,7 @@ type consumerState struct{
 	msgBackup []string
 }
 
-var consumers = make(map[int]consumerState)
+var consumers = make(map[int]*consumerState)
 
 func main() {
 	
@@ -94,7 +94,7 @@ func processMessage(msg string, conn net.Conn) {
 	case strings.HasPrefix(msg, "SUB"):
 		parts := strings.Split(msg, " ")
 		topic := parts[1]
-		idConsumer, err := strconv.Atoi(parts[2])
+		idConsumer, err := strconv.Atoi(parts[2]) //pase to int
 		if err != nil {
 			fmt.Printf("failed to convert the id to int")
 			return
@@ -105,24 +105,16 @@ func processMessage(msg string, conn net.Conn) {
 		if consumerData, ok := consumers[idConsumer]; ok {
 			if consumerData.conn == conn {
 				exists = true
+				sendLateMsgs(idConsumer)
 			} else {
 				consumerData.conn = conn
 				exists = true
+				sendLateMsgs(idConsumer)
 			}
 		}
-		// for i := range consumers {
-		// 	if idConsumer == consumers[i] && conn == consumerIds[i].conn {
-		// 		exists = true
-		// 		break
-		// 	} else if idConsumer == consumerIds[i].id && conn != consumerIds[i].conn {
-		// 		consumerIds[i].conn = conn
-		// 		exists = true
-		// 		break
-		// 	}
-		// }
 
 		if !exists {
-			consumers[idConsumer] = consumerState{
+			consumers[idConsumer] = &consumerState{
 				conn: conn,
 				msgBackup: nil,
 			}
@@ -132,6 +124,7 @@ func processMessage(msg string, conn net.Conn) {
 			for _, c := range conns {
 				if conn == c {
 					fmt.Printf("Connection already exists: %v", conn)
+					mu.Unlock()
 					return
 				}
 			}
@@ -142,25 +135,38 @@ func processMessage(msg string, conn net.Conn) {
 	case strings.HasPrefix(msg, "PUB"):
 		parts := strings.Split(msg, " ")
 		topic := parts[1]
+		var msgBackup []string
 
 		mu.Lock()
 		if conns, exists := brokerMap[topic]; exists {
 			for _, conn := range conns {
 				_, err := conn.Write([]byte(strings.Join(parts[2:], " ")))
 				if err != nil {
-
-					// for i := range consumerIds {
-					// 	if conn == consumerIds[i].conn {
-					// 		msgBackup[consumerIds[i].id] = append(msgBackup[consumerIds[i].id], msg) 
-					// 	}
-					// }
+					for i := range consumers {
+						if conn == consumers[i].conn {
+							if state, e := consumers[i]; e {
+								msgBackup = state.msgBackup
+							}
+							if len(msgBackup) > 9 {
+								msgBackup = msgBackup[1:]
+							}
+							consumers[i] = &consumerState{
+								conn: conn,
+								msgBackup: append(msgBackup, msg),
+							}
+							break
+						}
+					}
 				}
 			}
 		}
+
+		// this is wrong i should do a for loop for each conn in the topic
 		reader := bufio.NewReader(conn)
 		rsp, err := reader.ReadString('\n')
 		if err != nil {
 			fmt.Printf("Issue reading response: %v", err)
+			mu.Unlock()
 			return
 		}
 
@@ -168,10 +174,22 @@ func processMessage(msg string, conn net.Conn) {
 			rspParts := strings.Split(rsp, " ")
 			id, err := strconv.Atoi(rspParts[2])
 			if err != nil {
+				mu.Unlock()
 				return
 			}
 
-			// msgBackup[id] = append(msgBackup[id], msg)
+			if state, exists := consumers[id]; exists {
+				msgBackup = state.msgBackup
+			}
+
+			if len(msgBackup) > 9 {
+				msgBackup = msgBackup[1:]
+			}
+
+			consumers[id] = &consumerState{
+				conn: conn,
+				msgBackup: append(msgBackup, msg),
+			}
 		}
 		mu.Unlock()
 
@@ -188,5 +206,23 @@ func processMessage(msg string, conn net.Conn) {
 		}
 		brokerMap[topic] = temp
 		mu.Unlock()
+	}
+}
+
+func sendLateMsgs(idConsumer int) {
+	 
+	msgsNum := len(consumers[idConsumer].msgBackup)
+	conn := consumers[idConsumer].conn
+	if msgsNum > 0 {
+		for i := 0; i < msgsNum; i++ {
+			msg := consumers[idConsumer].msgBackup[i]
+			parts := strings.Split(msg, " ")
+
+			_, err := conn.Write([]byte(strings.Join(parts[2:], " ")))
+			if err != nil {
+				continue
+			}
+			consumers[idConsumer].msgBackup = consumers[idConsumer].msgBackup[1:]
+		}
 	}
 }
