@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 )
 
 var mu sync.RWMutex
@@ -79,7 +80,7 @@ func handleConnection(conn net.Conn) {
 
 		processMessage(ackMsg, conn)
 
-		response := "ACK: Ok"
+		response := "ACK: Ok\n"
 		_, err = conn.Write([]byte(response))
 		if err != nil {
 			log.Printf("Server write error: %v", err)
@@ -89,7 +90,8 @@ func handleConnection(conn net.Conn) {
 }
 
 func processMessage(msg string, conn net.Conn) {
-
+	
+	var connSlice []net.Conn
 	switch {
 	case strings.HasPrefix(msg, "SUB"):
 		parts := strings.Split(msg, " ")
@@ -139,11 +141,12 @@ func processMessage(msg string, conn net.Conn) {
 
 		mu.Lock()
 		if conns, exists := brokerMap[topic]; exists {
-			for _, conn := range conns {
-				_, err := conn.Write([]byte(strings.Join(parts[2:], " ")))
+			for _, con := range conns {
+				_, err := con.Write([]byte(strings.Join(parts[2:], " ") + "\n"))
 				if err != nil {
+					connSlice = append(connSlice, con)
 					for i := range consumers {
-						if conn == consumers[i].conn {
+						if con == consumers[i].conn {
 							if state, e := consumers[i]; e {
 								msgBackup = state.msgBackup
 							}
@@ -151,7 +154,7 @@ func processMessage(msg string, conn net.Conn) {
 								msgBackup = msgBackup[1:]
 							}
 							consumers[i] = &consumerState{
-								conn: conn,
+								conn: con,
 								msgBackup: append(msgBackup, msg),
 							}
 							break
@@ -160,18 +163,31 @@ func processMessage(msg string, conn net.Conn) {
 				}
 			}
 		}
+		mu.Unlock()
 
-		// this is wrong i should do a for loop for each conn in the topic
-		reader := bufio.NewReader(conn)
-		rsp, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Printf("Issue reading response: %v", err)
-			mu.Unlock()
-			return
+	case strings.HasPrefix(msg, "UNSUB"):
+		parts := strings.Split(msg, " ")
+		topic := parts[1]
+
+		temp := []net.Conn{}
+		mu.Lock()
+		for _, c := range brokerMap[topic] {
+			if c != conn {
+				temp = append(temp, c)
+			}
 		}
+		brokerMap[topic] = temp
+		mu.Unlock()
 
-		if strings.HasPrefix(rsp, "KO") {
-			rspParts := strings.Split(rsp, " ")
+	case strings.HasPrefix(msg, "LOG"):
+		mu.Lock()
+		var msgBackup []string
+		rspParts := strings.Split(msg, " ")
+		// timeLimit := 1 * time.Second 
+
+
+
+		if rspParts[1] == "KO" {
 			id, err := strconv.Atoi(rspParts[2])
 			if err != nil {
 				mu.Unlock()
@@ -190,22 +206,8 @@ func processMessage(msg string, conn net.Conn) {
 				conn: conn,
 				msgBackup: append(msgBackup, msg),
 			}
+			mu.Unlock()
 		}
-		mu.Unlock()
-
-	case strings.HasPrefix(msg, "UNSUB"):
-		parts := strings.Split(msg, " ")
-		topic := parts[1]
-
-		temp := []net.Conn{}
-		mu.Lock()
-		for _, c := range brokerMap[topic] {
-			if c != conn {
-				temp = append(temp, c)
-			}
-		}
-		brokerMap[topic] = temp
-		mu.Unlock()
 	}
 }
 
@@ -218,7 +220,7 @@ func sendLateMsgs(idConsumer int) {
 			msg := consumers[idConsumer].msgBackup[i]
 			parts := strings.Split(msg, " ")
 
-			_, err := conn.Write([]byte(strings.Join(parts[2:], " ")))
+			_, err := conn.Write([]byte(strings.Join(parts[2:], " ") + "\n"))
 			if err != nil {
 				continue
 			}
