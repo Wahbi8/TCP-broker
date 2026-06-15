@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	"time"
+	// "time"
 )
 
 var mu sync.RWMutex
@@ -21,6 +21,8 @@ var brokerMap = make(map[string][]net.Conn)
 type consumerState struct{
 	conn net.Conn
 	msgBackup []string
+	deliverCh chan string
+	ackCh chan bool
 }
 
 var consumers = make(map[int]*consumerState)
