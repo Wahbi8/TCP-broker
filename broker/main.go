@@ -16,23 +16,24 @@ import (
 
 var mu sync.RWMutex
 var brokerMap = make(map[string][]net.Conn)
+
 // var msgBackup = make(map[int][]string)
 
-type consumerState struct{
-	conn net.Conn
+type consumerState struct {
+	conn      net.Conn
 	msgBackup []string
 	deliverCh chan string
-	ackCh chan bool
+	ackCh     chan bool
 }
 
 var consumers = make(map[int]*consumerState)
 
 func main() {
-	
+
 	listener, err := net.Listen("tcp", ":8090")
-    if err != nil {
-        log.Fatal("Error listening:", err)
-    }
+	if err != nil {
+		log.Fatal("Error listening:", err)
+	}
 
 	// defer listener.Close()
 	sigChan := make(chan os.Signal, 1)
@@ -45,7 +46,7 @@ func main() {
 				log.Printf("Error accepting connection: %v", err)
 				continue
 			}
-		
+
 			go handleConnection(conn)
 		}
 	}()
@@ -54,7 +55,7 @@ func main() {
 	fmt.Println("\nShutting down gracefully...")
 
 	listener.Close()
-	
+
 	mu.Lock()
 	for _, conns := range brokerMap {
 		for _, c := range conns {
@@ -62,7 +63,7 @@ func main() {
 		}
 	}
 	mu.Unlock()
-	
+
 	fmt.Println("Server stopped.")
 }
 
@@ -77,7 +78,7 @@ func handleConnection(conn net.Conn) {
 			log.Printf("Read error: %v", err)
 			break
 		}
-	
+
 		ackMsg := strings.TrimSpace(message)
 
 		processMessage(ackMsg, conn)
@@ -92,7 +93,7 @@ func handleConnection(conn net.Conn) {
 }
 
 func processMessage(msg string, conn net.Conn) {
-	
+
 	var connSlice []net.Conn
 	switch {
 	case strings.HasPrefix(msg, "SUB"):
@@ -119,11 +120,11 @@ func processMessage(msg string, conn net.Conn) {
 
 		if !exists {
 			consumers[idConsumer] = &consumerState{
-				conn: conn,
+				conn:      conn,
 				msgBackup: nil,
 			}
 		}
-		
+
 		if conns, exists := brokerMap[topic]; exists {
 			for _, c := range conns {
 				if conn == c {
@@ -156,7 +157,7 @@ func processMessage(msg string, conn net.Conn) {
 								msgBackup = msgBackup[1:]
 							}
 							consumers[i] = &consumerState{
-								conn: con,
+								conn:      con,
 								msgBackup: append(msgBackup, msg),
 							}
 							break
@@ -185,9 +186,7 @@ func processMessage(msg string, conn net.Conn) {
 		mu.Lock()
 		var msgBackup []string
 		rspParts := strings.Split(msg, " ")
-		// timeLimit := 1 * time.Second 
-
-
+		// timeLimit := 1 * time.Second
 
 		if rspParts[1] == "KO" {
 			id, err := strconv.Atoi(rspParts[2])
@@ -205,7 +204,7 @@ func processMessage(msg string, conn net.Conn) {
 			}
 
 			consumers[id] = &consumerState{
-				conn: conn,
+				conn:      conn,
 				msgBackup: append(msgBackup, msg),
 			}
 			mu.Unlock()
@@ -214,7 +213,7 @@ func processMessage(msg string, conn net.Conn) {
 }
 
 func sendLateMsgs(idConsumer int) {
-	 
+
 	msgsNum := len(consumers[idConsumer].msgBackup)
 	conn := consumers[idConsumer].conn
 	if msgsNum > 0 {
