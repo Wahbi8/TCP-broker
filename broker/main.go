@@ -20,10 +20,11 @@ var brokerMap = make(map[string][]net.Conn)
 // var msgBackup = make(map[int][]string)
 
 type consumerState struct {
+	id 		  int 
 	conn      net.Conn
 	msgBackup []string
-	deliverCh chan string
-	ackCh     chan bool
+	queue chan string
+	reconnectCh chan net.Conn
 }
 
 var consumers = make(map[int]*consumerState)
@@ -99,6 +100,7 @@ func processMessage(msg string, conn net.Conn) {
 	case strings.HasPrefix(msg, "SUB"):
 		parts := strings.Split(msg, " ")
 		topic := parts[1]
+		
 		idConsumer, err := strconv.Atoi(parts[2]) //pase to int
 		if err != nil {
 			fmt.Printf("failed to convert the id to int")
@@ -106,24 +108,35 @@ func processMessage(msg string, conn net.Conn) {
 		}
 
 		mu.Lock()
+		state := &consumerState{
+			id:          idConsumer,
+			conn:        conn,
+			queue:       make(chan string, 100),
+			reconnectCh: make(chan net.Conn, 1),
+			msgBackup:   nil,
+		}
+
 		exists := false
 		if consumerData, ok := consumers[idConsumer]; ok {
 			if consumerData.conn == conn {
 				exists = true
-				sendLateMsgs(idConsumer)
+				// sendLateMsgs(idConsumer)
 			} else {
-				consumerData.conn = conn
+				consumerData.reconnectCh <- conn
 				exists = true
-				sendLateMsgs(idConsumer)
+				// sendLateMsgs(idConsumer)
 			}
 		}
 
 		if !exists {
 			consumers[idConsumer] = &consumerState{
+				id: 	   idConsumer,
 				conn:      conn,
 				msgBackup: nil,
 			}
+			go state.delivery()
 		}
+
 
 		if conns, exists := brokerMap[topic]; exists {
 			for _, c := range conns {
@@ -226,6 +239,14 @@ func sendLateMsgs(idConsumer int) {
 				continue
 			}
 			consumers[idConsumer].msgBackup = consumers[idConsumer].msgBackup[1:]
+		}
+	}
+}
+
+func (consumer *consumerState) delivery(){
+	for {
+		select {
+			
 		}
 	}
 }
