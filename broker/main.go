@@ -15,7 +15,7 @@ import (
 )
 
 var mu sync.RWMutex
-var brokerMap = make(map[string][]net.Conn)
+var brokerMap = make(map[string][]*consumerState)
 
 // var msgBackup = make(map[int][]string)
 
@@ -58,9 +58,9 @@ func main() {
 	listener.Close()
 
 	mu.Lock()
-	for _, conns := range brokerMap {
-		for _, c := range conns {
-			c.Close()
+	for _, consumer := range brokerMap {
+		for _, c := range consumer {
+			c.conn.Close()
 		}
 	}
 	mu.Unlock()
@@ -95,7 +95,7 @@ func handleConnection(conn net.Conn) {
 
 func processMessage(msg string, conn net.Conn) {
 
-	var connSlice []net.Conn
+	// var connSlice []net.Conn
 	switch {
 	case strings.HasPrefix(msg, "SUB"):
 		parts := strings.Split(msg, " ")
@@ -129,66 +129,45 @@ func processMessage(msg string, conn net.Conn) {
 		}
 
 		if !exists {
-			consumers[idConsumer] = &consumerState{
-				id: 	   idConsumer,
-				conn:      conn,
-				msgBackup: nil,
-			}
+			consumers[idConsumer] = state
 			go state.delivery()
 		}
 
 
-		if conns, exists := brokerMap[topic]; exists {
-			for _, c := range conns {
-				if conn == c {
+		if consumer, exists := brokerMap[topic]; exists {
+			for _, c := range consumer {
+				if conn == c.conn {
 					fmt.Printf("Connection already exists: %v", conn)
 					mu.Unlock()
 					return
 				}
 			}
 		}
-		brokerMap[topic] = append(brokerMap[topic], conn)
+		brokerMap[topic] = append(brokerMap[topic], state)
 		mu.Unlock()
 
 	case strings.HasPrefix(msg, "PUB"):
 		parts := strings.Split(msg, " ")
 		topic := parts[1]
-		var msgBackup []string
+		// var msgBackup []string
 
 		mu.Lock()
-		if conns, exists := brokerMap[topic]; exists {
-			for _, con := range conns {
-				_, err := con.Write([]byte(strings.Join(parts[2:], " ") + "\n"))
-				if err != nil {
-					connSlice = append(connSlice, con)
-					for i := range consumers {
-						if con == consumers[i].conn {
-							if state, e := consumers[i]; e {
-								msgBackup = state.msgBackup
-							}
-							if len(msgBackup) > 9 {
-								msgBackup = msgBackup[1:]
-							}
-							consumers[i] = &consumerState{
-								conn:      con,
-								msgBackup: append(msgBackup, msg),
-							}
-							break
-						}
-					}
-				}
+		if consumer, exists := brokerMap[topic]; exists {
+			for _, c := range consumer {
+				c.queue <- msg
 			}
 		}
+
 		mu.Unlock()
 
 	case strings.HasPrefix(msg, "UNSUB"):
 		parts := strings.Split(msg, " ")
 		topic := parts[1]
 
-		temp := []net.Conn{}
+		temp := []*consumerState{}
 		mu.Lock()
 		for _, c := range brokerMap[topic] {
-			if c != conn {
+			if c.conn != conn {
 				temp = append(temp, c)
 			}
 		}
@@ -220,33 +199,51 @@ func processMessage(msg string, conn net.Conn) {
 				conn:      conn,
 				msgBackup: append(msgBackup, msg),
 			}
-			mu.Unlock()
+		}
+		mu.Unlock()
+	}
+}
+
+func (consumer *consumerState) delivery(){
+	
+	for {
+		select {
+		case q := <- consumer.queue:
+			parts := strings.Split(q, " ")
+
+			_, err := consumer.conn.Write([]byte(strings.Join(parts[2:], " ") + "\n"))
+				
+			if err != nil {
+
+				spaceLimit := 10 
+				if len(consumer.msgBackup) >= spaceLimit {
+					consumer.msgBackup = consumer.msgBackup[1:]
+				}
+				consumer.msgBackup = append(consumer.msgBackup, q)
+			}
+			// start timer
+			// wait for the return from consumer (not sure where i should wait in here or in processMessage())
+
+		case <-ticker.C:
+			
 		}
 	}
 }
 
-func sendLateMsgs(idConsumer int) {
+func (consumer *consumerState) sendLateMsgs() {
 
-	msgsNum := len(consumers[idConsumer].msgBackup)
-	conn := consumers[idConsumer].conn
+	msgsNum := len(consumer.msgBackup)
+	conn := consumer.conn
 	if msgsNum > 0 {
 		for i := 0; i < msgsNum; i++ {
-			msg := consumers[idConsumer].msgBackup[i]
+			msg := consumer.msgBackup[i]
 			parts := strings.Split(msg, " ")
 
 			_, err := conn.Write([]byte(strings.Join(parts[2:], " ") + "\n"))
 			if err != nil {
 				continue
 			}
-			consumers[idConsumer].msgBackup = consumers[idConsumer].msgBackup[1:]
-		}
-	}
-}
-
-func (consumer *consumerState) delivery(){
-	for {
-		select {
-			
+			consumer.msgBackup = consumer.msgBackup[1:]
 		}
 	}
 }
