@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
-	// "time"
+	"time"
 )
 
 var mu sync.RWMutex
@@ -25,6 +25,8 @@ type consumerState struct {
 	msgBackup []string
 	queue chan string
 	reconnectCh chan net.Conn
+	inFlight map[string]time.Time
+	ackCh chan bool
 }
 
 var consumers = make(map[int]*consumerState)
@@ -84,11 +86,9 @@ func handleConnection(conn net.Conn) {
 
 		processMessage(ackMsg, conn)
 
-		response := "ACK: Ok\n"
-		_, err = conn.Write([]byte(response))
-		if err != nil {
-			log.Printf("Server write error: %v", err)
-			break
+		if !strings.HasPrefix(ackMsg, "LOG") {
+			response := "ACK: Ok\n"
+			conn.Write([]byte(response))
 		}
 	}
 }
@@ -114,17 +114,18 @@ func processMessage(msg string, conn net.Conn) {
 			queue:       make(chan string, 100),
 			reconnectCh: make(chan net.Conn, 1),
 			msgBackup:   nil,
+			inFlight:    make(map[string]time.Time),
+			ackCh:       make(chan bool, 100), 
 		}
 
 		exists := false
 		if consumerData, ok := consumers[idConsumer]; ok {
 			if consumerData.conn == conn {
 				exists = true
-				// sendLateMsgs(idConsumer)
 			} else {
 				consumerData.reconnectCh <- conn
-				exists = true
-				// sendLateMsgs(idConsumer)
+				mu.Unlock()
+				return
 			}
 		}
 
@@ -176,9 +177,7 @@ func processMessage(msg string, conn net.Conn) {
 
 	case strings.HasPrefix(msg, "LOG"):
 		mu.Lock()
-		var msgBackup []string
 		rspParts := strings.Split(msg, " ")
-		// timeLimit := 1 * time.Second
 
 		if rspParts[1] == "KO" {
 			id, err := strconv.Atoi(rspParts[2])
@@ -187,17 +186,23 @@ func processMessage(msg string, conn net.Conn) {
 				return
 			}
 
-			if state, exists := consumers[id]; exists {
-				msgBackup = state.msgBackup
+			state, exists := consumers[id]
+			if !exists {
+				mu.Unlock()
+				return
 			}
 
-			if len(msgBackup) > 9 {
-				msgBackup = msgBackup[1:]
+			if len(state.msgBackup) >= 10 {
+				state.msgBackup = state.msgBackup[1:]
 			}
+			state.msgBackup = append(state.msgBackup, msg)
+			
+		}
 
-			consumers[id] = &consumerState{
-				conn:      conn,
-				msgBackup: append(msgBackup, msg),
+		if rspParts[1] == "OK" {
+			id, _ := strconv.Atoi(rspParts[2])
+			if state, ok := consumers[id]; ok {
+				state.ackCh <- true
 			}
 		}
 		mu.Unlock()
@@ -206,6 +211,8 @@ func processMessage(msg string, conn net.Conn) {
 
 func (consumer *consumerState) delivery(){
 	
+	ticker := time.NewTicker(2 * time.Second) 
+	defer ticker.Stop() 
 	for {
 		select {
 		case q := <- consumer.queue:
@@ -220,30 +227,63 @@ func (consumer *consumerState) delivery(){
 					consumer.msgBackup = consumer.msgBackup[1:]
 				}
 				consumer.msgBackup = append(consumer.msgBackup, q)
+			} else {
+				consumer.inFlight[q] = time.Now()
 			}
-			// start timer
-			// wait for the return from consumer (not sure where i should wait in here or in processMessage())
 
-		case <-ticker.C:
+		case reConn := <- consumer.reconnectCh:
+			consumer.conn = reConn
+
+			consumer.sendLateMsgs()
+		
+		case <-consumer.ackCh:
+			for k := range consumer.inFlight {
+				delete(consumer.inFlight, k)
+				break
+			}
 			
+		case <-ticker.C:
+			now := time.Now()
+			for msg, sentAt := range consumer.inFlight {
+				if now.Sub(sentAt) > 2*time.Second {
+					parts := strings.Split(msg, " ")
+					payload := strings.Join(parts[2:], " ")
+
+					_, err := consumer.conn.Write([]byte(payload + "\n"))
+					if err != nil {
+						delete(consumer.inFlight, msg)
+						if len(consumer.msgBackup) >= 10 {
+							consumer.msgBackup = consumer.msgBackup[1:]
+						}
+						consumer.msgBackup = append(consumer.msgBackup, msg)
+					} else {
+						consumer.inFlight[msg] = time.Now()
+					}
+				}
+			}
 		}
+		
 	}
 }
 
 func (consumer *consumerState) sendLateMsgs() {
+	msgs := consumer.msgBackup
+	consumer.msgBackup = nil 
 
-	msgsNum := len(consumer.msgBackup)
-	conn := consumer.conn
-	if msgsNum > 0 {
-		for i := 0; i < msgsNum; i++ {
-			msg := consumer.msgBackup[i]
-			parts := strings.Split(msg, " ")
+	for _, msg := range msgs {
+		parts := strings.Split(msg, " ")
+		payload := msg
+		payload = strings.Join(parts[2:], " ")
+		
 
-			_, err := conn.Write([]byte(strings.Join(parts[2:], " ") + "\n"))
-			if err != nil {
-				continue
+		_, err := consumer.conn.Write([]byte(payload + "\n"))
+		if err != nil {
+			if len(consumer.msgBackup) >= 10 {
+				consumer.msgBackup = consumer.msgBackup[1:]
 			}
-			consumer.msgBackup = consumer.msgBackup[1:]
+			consumer.msgBackup = append(consumer.msgBackup, msg)
+		} else {
+			consumer.inFlight[msg] = time.Now()
 		}
 	}
 }

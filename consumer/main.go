@@ -40,7 +40,7 @@ func main() {
 			msg, err := reader.ReadString('\n')
 			if err != nil {
 				fmt.Println("Issue reading msg:", err)
-				// conn.Write([]byte(fmt.Sprintf("LOG KO %v\n", id)))
+				conn.Write([]byte(fmt.Sprintf("LOG KO %v\n", id)))
 				conn.Close()
 				break
 			}
