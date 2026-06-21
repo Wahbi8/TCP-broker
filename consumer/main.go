@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"time"
+	"strings"
 )
 
 func main() {
@@ -45,7 +46,18 @@ func main() {
 				break
 			}
 
-			conn.Write([]byte(fmt.Sprintf("LOG OK %v\n", id)))
+			if strings.HasPrefix(msg, "ACK:") {
+				continue
+			}
+
+			parts := strings.Split(msg, " ")
+
+			_, err = conn.Write([]byte(fmt.Sprintf("LOG OK %v %v\n", id, parts[0])))
+			if err != nil {
+				fmt.Println("Issue sending ack:", err)
+				conn.Close()
+				break
+			}
 
 			fmt.Print(msg)
 		}
