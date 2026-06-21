@@ -26,13 +26,10 @@ type consumerState struct {
 	queue chan string
 	reconnectCh chan net.Conn
 	inFlight map[int]*inFlightStruct
-	ack ack
+	ackCh       chan int 
+	msgSeq      int 
 }
 
-type ack struct{
-	ackCh chan bool
-	num int
-}
 
 type inFlightStruct struct{
 	msg string
@@ -125,10 +122,8 @@ func processMessage(msg string, conn net.Conn) {
 			reconnectCh: make(chan net.Conn, 1),
 			msgBackup:   nil,
 			inFlight:    make(map[int]*inFlightStruct),
-			ack:         ack{
-							ackCh: make(chan bool, 100),
-							num: 0,
-						 }, 
+			ackCh:       make(chan int, 100),
+			msgSeq:      0,  
 		}
 
 		exists := false
@@ -192,30 +187,32 @@ func processMessage(msg string, conn net.Conn) {
 		mu.Lock()
 		rspParts := strings.Split(msg, " ")
 
-		if rspParts[1] == "KO" {
-			id, err := strconv.Atoi(rspParts[2])
-			if err != nil {
-				mu.Unlock()
-				return
-			}
+		// if rspParts[1] == "KO" {
+		// 	id, err := strconv.Atoi(rspParts[2])
+		// 	if err != nil {
+		// 		mu.Unlock()
+		// 		return
+		// 	}
 
-			state, exists := consumers[id]
-			if !exists {
-				mu.Unlock()
-				return
-			}
+		// 	state, exists := consumers[id]
+		// 	if !exists {
+		// 		mu.Unlock()
+		// 		return
+		// 	}
 
-			if len(state.msgBackup) >= 10 {
-				state.msgBackup = state.msgBackup[1:]
-			}
-			state.msgBackup = append(state.msgBackup, msg)
+		// 	if len(state.msgBackup) >= 10 {
+		// 		state.msgBackup = state.msgBackup[1:]
+		// 	}
+		// 	state.msgBackup = append(state.msgBackup, msg)
 			
-		}
+		// }
 
 		if rspParts[1] == "OK" {
 			id, _ := strconv.Atoi(rspParts[2])
+			msgID, _ := strconv.Atoi(rspParts[3]) 
+
 			if state, ok := consumers[id]; ok {
-				state.ack.ackCh <- true
+				state.ackCh <- msgID
 			}
 		}
 		mu.Unlock()
@@ -229,9 +226,15 @@ func (consumer *consumerState) delivery(){
 	for {
 		select {
 		case q := <- consumer.queue:
-			parts := strings.Split(q, " ")
+			consumer.msgSeq++ 
+			currentMsgID := consumer.msgSeq
 
-			_, err := consumer.conn.Write([]byte(strings.Join(parts[2:], " ") + "\n"))
+			parts := strings.Split(q, " ")
+			payload := strings.Join(parts[2:], " ")
+
+			outMsg := fmt.Sprintf("%d %s\n", currentMsgID, payload)
+
+			_, err := consumer.conn.Write([]byte(outMsg))
 				
 			if err != nil {
 
@@ -241,21 +244,18 @@ func (consumer *consumerState) delivery(){
 				}
 				consumer.msgBackup = append(consumer.msgBackup, q)
 			} else {
-				num := len(consumer.inFlight)
-				consumer.inFlight[num + 1] = &inFlightStruct{
-					msg: q,
+				consumer.inFlight[currentMsgID] = &inFlightStruct{
+					msg:  q,
 					time: time.Now(),
 				}
-				consumer.ack.num = len(consumer.inFlight)
 			}
 
 		case reConn := <- consumer.reconnectCh:
 			consumer.conn = reConn
-
 			consumer.sendLateMsgs()
 		
-		case <-consumer.ack.ackCh:
-			delete(consumer.inFlight, consumer.ack.num)
+		case ackedMsgID := <-consumer.ackCh:
+			delete(consumer.inFlight, ackedMsgID)
 			
 		case <-ticker.C:
 			now := time.Now()
@@ -286,25 +286,28 @@ func (consumer *consumerState) delivery(){
 
 func (consumer *consumerState) sendLateMsgs() {
 	msgs := consumer.msgBackup
-	consumer.msgBackup = nil 
+	consumer.msgBackup = nil
 
 	for _, msg := range msgs {
+		consumer.msgSeq++
+		currentMsgID := consumer.msgSeq
+
 		parts := strings.Split(msg, " ")
 		payload := strings.Join(parts[2:], " ")
 
-		_, err := consumer.conn.Write([]byte(payload + "\n"))
+		outMsg := fmt.Sprintf("%d %s\n", currentMsgID, payload)
+		_, err := consumer.conn.Write([]byte(outMsg))
+
 		if err != nil {
 			if len(consumer.msgBackup) >= 10 {
 				consumer.msgBackup = consumer.msgBackup[1:]
 			}
 			consumer.msgBackup = append(consumer.msgBackup, msg)
 		} else {
-			num := len(consumer.inFlight)
-				consumer.inFlight[num + 1] = &inFlightStruct{
-					msg: msg,
-					time: time.Now(),
-				}
-				consumer.ack.num = len(consumer.inFlight)
+			consumer.inFlight[currentMsgID] = &inFlightStruct{
+				msg:  msg,
+				time: time.Now(),
+			}
 		}
 	}
 }
