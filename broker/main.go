@@ -25,8 +25,18 @@ type consumerState struct {
 	msgBackup []string
 	queue chan string
 	reconnectCh chan net.Conn
-	inFlight map[string]time.Time
+	inFlight map[int]*inFlightStruct
+	ack ack
+}
+
+type ack struct{
 	ackCh chan bool
+	num int
+}
+
+type inFlightStruct struct{
+	msg string
+	time time.Time
 }
 
 var consumers = make(map[int]*consumerState)
@@ -114,8 +124,11 @@ func processMessage(msg string, conn net.Conn) {
 			queue:       make(chan string, 100),
 			reconnectCh: make(chan net.Conn, 1),
 			msgBackup:   nil,
-			inFlight:    make(map[string]time.Time),
-			ackCh:       make(chan bool, 100), 
+			inFlight:    make(map[int]*inFlightStruct),
+			ack:         ack{
+							ackCh: make(chan bool, 100),
+							num: 0,
+						 }, 
 		}
 
 		exists := false
@@ -202,7 +215,7 @@ func processMessage(msg string, conn net.Conn) {
 		if rspParts[1] == "OK" {
 			id, _ := strconv.Atoi(rspParts[2])
 			if state, ok := consumers[id]; ok {
-				state.ackCh <- true
+				state.ack.ackCh <- true
 			}
 		}
 		mu.Unlock()
@@ -228,7 +241,12 @@ func (consumer *consumerState) delivery(){
 				}
 				consumer.msgBackup = append(consumer.msgBackup, q)
 			} else {
-				consumer.inFlight[q] = time.Now()
+				num := len(consumer.inFlight)
+				consumer.inFlight[num + 1] = &inFlightStruct{
+					msg: q,
+					time: time.Now(),
+				}
+				consumer.ack.num = len(consumer.inFlight)
 			}
 
 		case reConn := <- consumer.reconnectCh:
@@ -236,28 +254,28 @@ func (consumer *consumerState) delivery(){
 
 			consumer.sendLateMsgs()
 		
-		case <-consumer.ackCh:
-			for k := range consumer.inFlight {
-				delete(consumer.inFlight, k)
-				break
-			}
+		case <-consumer.ack.ackCh:
+			delete(consumer.inFlight, consumer.ack.num)
 			
 		case <-ticker.C:
 			now := time.Now()
-			for msg, sentAt := range consumer.inFlight {
-				if now.Sub(sentAt) > 2*time.Second {
-					parts := strings.Split(msg, " ")
+			for id, inFlight := range consumer.inFlight {
+				if now.Sub(inFlight.time) > 2*time.Second {
+					parts := strings.Split(inFlight.msg, " ")
 					payload := strings.Join(parts[2:], " ")
 
 					_, err := consumer.conn.Write([]byte(payload + "\n"))
 					if err != nil {
-						delete(consumer.inFlight, msg)
+						delete(consumer.inFlight, id)
 						if len(consumer.msgBackup) >= 10 {
 							consumer.msgBackup = consumer.msgBackup[1:]
 						}
-						consumer.msgBackup = append(consumer.msgBackup, msg)
+						consumer.msgBackup = append(consumer.msgBackup, inFlight.msg)
 					} else {
-						consumer.inFlight[msg] = time.Now()
+						consumer.inFlight[id] = &inFlightStruct{
+							msg: inFlight.msg,
+							time: time.Now(),
+						}
 					}
 				}
 			}
@@ -272,9 +290,7 @@ func (consumer *consumerState) sendLateMsgs() {
 
 	for _, msg := range msgs {
 		parts := strings.Split(msg, " ")
-		payload := msg
-		payload = strings.Join(parts[2:], " ")
-		
+		payload := strings.Join(parts[2:], " ")
 
 		_, err := consumer.conn.Write([]byte(payload + "\n"))
 		if err != nil {
@@ -283,7 +299,12 @@ func (consumer *consumerState) sendLateMsgs() {
 			}
 			consumer.msgBackup = append(consumer.msgBackup, msg)
 		} else {
-			consumer.inFlight[msg] = time.Now()
+			num := len(consumer.inFlight)
+				consumer.inFlight[num + 1] = &inFlightStruct{
+					msg: msg,
+					time: time.Now(),
+				}
+				consumer.ack.num = len(consumer.inFlight)
 		}
 	}
 }
